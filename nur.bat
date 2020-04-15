@@ -1,0 +1,1 @@
+python ../../game/Judger/judger.py python+../../game/main.py last.exe  main.exe record
