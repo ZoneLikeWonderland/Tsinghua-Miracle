@@ -1,0 +1,157 @@
+{
+    "CreatureCapacityLevelUpTurn": [51,76],
+    "UnitData": {
+        "Archer": {
+            "cost": [2,4,6],
+            "atk": [1,2,3],
+            "hp": [2,3,4],
+            "atk_range": [[3,4],[3,4],[3,4]],
+            "max_move": [3,3,3],
+            "cool_down": [4,4,4],
+            "duplicate": [3,4,5],
+            "flying": false,
+            "atk_flying": true,
+            "agility": false,
+            "holy_shield": false
+        },
+        "Swordsman": {
+            "cost": [2,4,6],
+            "atk": [2,4,6],
+            "hp": [2,4,6],
+            "atk_range": [[1,1],[1,1],[1,1]],
+            "max_move": [3,3,3],
+            "cool_down": [2,2,3],
+            "duplicate": [6,7,8],
+            "flying": false,
+            "atk_flying": false,
+            "agility": false,
+            "holy_shield": false
+        },
+        "BlackBat": {
+            "cost": [2,3,6],
+            "atk": [1,2,4],
+            "hp": [1,1,2],
+            "atk_range": [[0,1],[0,1],[0,1]],
+            "max_move": [4,4,5],
+            "cool_down": [3,3,4],
+            "duplicate": [3,4,5],
+            "flying": true,
+            "atk_flying": true,
+            "agility": false,
+            "holy_shield": false
+        },
+        "Priest": {
+            "cost": [2,4,7],
+            "atk": [0,0,0],
+            "hp": [3,4,6],
+            "atk_range": [[0,1],[0,1],[0,2]],
+            "max_move": [5,5,5],
+            "cool_down": [3,3,5],
+            "duplicate": [3,4,4],
+            "flying": false,
+            "atk_flying": true,
+            "agility": false,
+            "holy_shield": false,
+            "heal": [1,1,1],
+            "heal_range": [2,3,3],
+            "atk_up": [1,1,1],
+            "atk_up_range": [2,3,3]
+        },
+        "VolcanoDragon": {
+            "cost": [5,7,9],
+            "atk": [3,4,5],
+            "hp": [5,7,9],
+            "atk_range": [[1,2],[1,2],[1,2]],
+            "max_move": [2,2,2],
+            "cool_down": [5,5,5],
+            "duplicate": [3,4,5],
+            "flying": false,
+            "atk_flying": false,
+            "agility": false,
+            "holy_shield": false,
+            "splash_damage": [3,4,5],
+            "self_range": 2,
+            "target_range": 1
+        },
+        "Inferno": {
+            "cost": [8],
+            "atk": [8],
+            "hp": [12],
+            "atk_range": [[0,1]],
+            "max_move": [3],
+            "cool_down": [999],
+            "duplicate": [1],
+            "flying": false,
+            "atk_flying": true,
+            "agility": false,
+            "holy_shield": false
+        },
+        "FrostDragon": {
+            "cost": [5,7,9],
+            "atk": [3,4,5],
+            "hp": [4,6,8],
+            "atk_range": [[0,2],[0,2],[0,2]],
+            "max_move": [2,2,2],
+            "cool_down": [4,4,5],
+            "duplicate": [3,4,5],
+            "flying": false,
+            "atk_flying": true,
+            "agility": false,
+            "holy_shield": false
+        }
+    },
+    "Artifacts": {
+        "HolyLight": {
+            "target_type": "Pos",
+            "cost": 6,
+            "cool_down": 5,
+            "affect_range": 2,
+            "atk_up": 2,
+            "effect_rounds": 4
+        },
+        "SalamanderShield": {
+            "target_type": "Unit",
+            "cost": 6,
+            "cool_down": 4,
+            "hp_up": 3
+        },
+        "InfernoFlame": {
+            "target_type": "Pos",
+            "cost": 8,
+            "cool_down": 6,
+            "damage": 2,
+            "affect_range": 2,
+            "summon": "Inferno"
+        },
+        "WindBlessing": {
+            "target_type": "Pos",
+            "cost": 8,
+            "cool_down": 12,
+            "affect_range": 1
+        }
+    },
+    "UnitNameParsed": {
+        "Archer": 0,
+        "Swordsman": 1,
+        "BlackBat": 2,
+        "Priest": 3,
+        "VolcanoDragon": 4,
+        "Inferno": 5,
+        "FrostDragon": 6
+    },
+    "ArtifactNameParsed": {
+        "HolyLight": 0,
+        "SalamanderShield": 1,
+        "InfernoFlame": 2,
+        "WindBlessing": 3
+    },
+    "ArtifactStateParsed": {
+        "Ready": 0,
+        "In Use": 1,
+        "Cooling Down":2
+    },
+    "ArtifactTargetParsed": {
+        "Pos": 0,
+        "Unit": 1
+    }
+}
