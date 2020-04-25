@@ -7,6 +7,8 @@
 #include <random>
 #include <stdlib.h>
 #include <time.h>
+#include <unordered_map>
+#include <unordered_set>
 
 using gameunit::Pos;
 using gameunit::Unit;
@@ -56,7 +58,7 @@ void AI::chooseCards() {
      * 【进阶】在选择卡牌时，就已经知道了自己的所在阵营和先后手，因此可以在此处根据先后手的不同设置不同的卡组和神器
      */
     my_artifacts = {"HolyLight"};
-    my_creatures = {"Archer", "Swordsman", "VolcanoDragon"};
+    my_creatures = {"Archer", "BlackBat", "VolcanoDragon"};
     init();
 }
 
@@ -159,12 +161,13 @@ void AI::play() {
     bool suc = true;
     while (mana >= 2 && suc) {
         suc = false;
+        suc |= call(CARD_DICT.at("BlackBat")[3]);
         suc |= call(CARD_DICT.at("Archer")[2]);
-        suc |= call(CARD_DICT.at("Swordsman")[3]);
-        suc |= call(CARD_DICT.at("VolcanoDragon")[3]);
-        suc |= call(CARD_DICT.at("Swordsman")[2]);
+        suc |= call(CARD_DICT.at("BlackBat")[2]);
+        suc |= call(CARD_DICT.at("Archer")[2]);
+        suc |= call(CARD_DICT.at("BlackBat")[1]);
+        suc |= call(CARD_DICT.at("Archer")[2]);
         suc |= call(CARD_DICT.at("VolcanoDragon")[2]);
-        suc |= call(CARD_DICT.at("Swordsman")[1]);
         suc |= call(CARD_DICT.at("VolcanoDragon")[1]);
         suc |= call(CARD_DICT.at("Archer")[1]);
     }
@@ -215,6 +218,7 @@ Pos AI::posShift(Pos pos, string direct) {
         else if (direct == "IB") //劣势路后方
             return make_tuple(get<0>(pos) + 1, get<1>(pos), get<2>(pos) - 1);
     }
+    return invalid;
 }
 
 void AI::battle() {
@@ -241,7 +245,7 @@ void AI::battle() {
             auto type_id_gen = [](const string &type_name) {
                 if (type_name == "VolcanoDragon")
                     return 0;
-                else if (type_name == "Swordsman")
+                else if (type_name == "BlackBat")
                     return 1;
                 else
                     return 2;
@@ -265,9 +269,12 @@ void AI::battle() {
             default_random_engine g(static_cast<unsigned int>(time(nullptr)));
             int tar = uniform_int_distribution<>(0, target_list.size() - 1)(g);
             attack(ally.id, target_list[tar].id);
-        } else if (ally.type == "Swordsman") {
+        } else if (ally.type == "BlackBat") {
             nth_element(enemy_list.begin(), enemy_list.begin(), enemy_list.end(),
-                        [](const Unit &_enemy1, const Unit &_enemy2) { return _enemy1.atk < _enemy2.atk; });
+                        [](const Unit &_enemy1, const Unit &_enemy2) {
+                            return (_enemy1.atk_flying && !_enemy2.atk_flying) ||
+                                   (_enemy1.atk_flying == _enemy2.atk_flying && _enemy1.atk < _enemy2.atk);
+                        });
             attack(ally.id, target_list[0].id);
         } else if (ally.type == "Archer") {
             sort(enemy_list.begin(), enemy_list.end(),
@@ -295,6 +302,38 @@ void AI::battle() {
     }
 }
 
+struct poshash {
+    size_t operator()(const Pos &pos) const {
+        return (std::get<0>(pos) << 20) + (std::get<1>(pos) << 10) + std::get<2>(pos);
+    }
+};
+
+std::unordered_set<Pos, poshash> circle(Pos pos, int radius) {
+    if (radius == 0) return std::unordered_set<Pos, poshash>({pos});
+    std::unordered_set<Pos, poshash> ret;
+    std::vector<Pos> start = {make_tuple(get<0>(pos), get<1>(pos) + radius, get<2>(pos) - radius),
+                              make_tuple(get<0>(pos), get<1>(pos) - radius, get<2>(pos) + radius),
+                              make_tuple(get<0>(pos) + radius, get<1>(pos), get<2>(pos) - radius),
+                              make_tuple(get<0>(pos) - radius, get<1>(pos), get<2>(pos) + radius),
+                              make_tuple(get<0>(pos) + radius, get<1>(pos) - radius, get<2>(pos)),
+                              make_tuple(get<0>(pos) - radius, get<1>(pos) + radius, get<2>(pos))};
+    for (int i = 1; i <= radius; i++) {
+        for (auto &x : start) ret.insert(x);
+        start[0] = make_tuple(get<0>(start[0]) - 1, get<1>(start[0]), get<2>(start[0]) + 1);
+        start[1] = make_tuple(get<0>(start[1]) + 1, get<1>(start[1]), get<2>(start[1]) - 1);
+        start[2] = make_tuple(get<0>(start[2]) - 1, get<1>(start[2]) + 1, get<2>(start[2]));
+        start[3] = make_tuple(get<0>(start[3]) + 1, get<1>(start[3]) - 1, get<2>(start[3]));
+        start[4] = make_tuple(get<0>(start[4]), get<1>(start[4]) + 1, get<2>(start[4]) - 1);
+        start[5] = make_tuple(get<0>(start[5]), get<1>(start[5]) - 1, get<2>(start[5]) + 1);
+    }
+    return ret;
+}
+std::unordered_set<Pos, poshash> getdanger(Pos pos, int l, int r) {
+    std::unordered_set<Pos, poshash> ret;
+    for (int i = l; i <= r; i++) ret.merge(circle(pos, i));
+    return ret;
+}
+
 void AI::march() {
     //处理生物的移动
 
@@ -306,12 +345,19 @@ void AI::march() {
      * 在移动的时候可以考虑一下避开敌方生物攻击范围实现、为己方强力生物让路、堵住敌方出兵点等策略
      * 如果采用其他生物组合，可以考虑抢占更多驻扎点
      */
+    std::unordered_set<Pos, poshash> dangerzone, dangerflyzone;
+    auto enemy_list = getUnitsByCamp(my_camp ^ 1);
+    for (auto &enemy : enemy_list) {
+        dangerzone.merge(getdanger(enemy.pos, enemy.atk_range[0], enemy.atk_range[1]));
+        if (enemy.atk_flying) dangerflyzone.merge(getdanger(enemy.pos, enemy.atk_range[0], enemy.atk_range[1]));
+    }
+
     int cap_id = -1;
 
     auto ally_list = getUnitsByCamp(my_camp);
     sort(ally_list.begin(), ally_list.end(), [](const Unit &_unit1, const Unit &_unit2) {
         auto type_id_gen = [](const string &type_name) {
-            if (type_name == "Swordsman")
+            if (type_name == "BlackBat")
                 return 0;
             else if (type_name == "Archer")
                 return 1;
@@ -326,27 +372,28 @@ void AI::march() {
     }
     for (const auto &ally : ally_list) {
         if (!ally.can_move) continue;
-        if (ally.type == "Swordsman") {
-            //获取所有可到达的位置
-            auto reach_pos_with_dis = reachable(ally, map);
-            //压平
-            vector<Pos> reach_pos_list;
-            for (const auto &reach_pos : reach_pos_with_dis) {
-                for (auto pos : reach_pos) reach_pos_list.push_back(pos);
-            }
-            if (reach_pos_list.empty()) continue;
-            auto target_pos = enemy_pos;
-            if (empty_slot == 0) {
-                for (const auto &barrack : map.barracks)
-                    if (barrack.camp == my_camp ^ 1) target_pos = barrack.pos;
-            }
-            //优先走到距离敌方神迹更近的位置
-            nth_element(reach_pos_list.begin(), reach_pos_list.begin(), reach_pos_list.end(),
-                        [this, target_pos](Pos _pos1, Pos _pos2) {
-                            return cube_distance(_pos1, target_pos) < cube_distance(_pos2, target_pos);
-                        });
-            move(ally.id, reach_pos_list[0]);
-        } else {
+        // if (ally.type == "Swordsman") {
+        //     //获取所有可到达的位置
+        //     auto reach_pos_with_dis = reachable(ally, map);
+        //     //压平
+        //     vector<Pos> reach_pos_list;
+        //     for (const auto &reach_pos : reach_pos_with_dis) {
+        //         for (auto pos : reach_pos) reach_pos_list.push_back(pos);
+        //     }
+        //     if (reach_pos_list.empty()) continue;
+        //     auto target_pos = enemy_pos;
+        //     if (empty_slot == 0) {
+        //         for (const auto &barrack : map.barracks)
+        //             if (barrack.camp == my_camp ^ 1) target_pos = barrack.pos;
+        //     }
+        //     //优先走到距离敌方神迹更近的位置
+        //     nth_element(reach_pos_list.begin(), reach_pos_list.begin(), reach_pos_list.end(),
+        //                 [this, target_pos](Pos _pos1, Pos _pos2) {
+        //                     return cube_distance(_pos1, target_pos) < cube_distance(_pos2, target_pos);
+        //                 });
+        //     move(ally.id, reach_pos_list[0]);
+        // } else
+        {
             // //如果已经在兵营就不动了
             // bool on_barrack = false;
             // for (const auto &barrack : map.barracks)
@@ -361,7 +408,14 @@ void AI::march() {
             //压平
             vector<Pos> reach_pos_list;
             for (const auto &reach_pos : reach_pos_with_dis) {
-                for (auto pos : reach_pos) reach_pos_list.push_back(pos);
+                for (auto pos : reach_pos) {
+                    if (pos == enemy_pos) continue;
+                    if (ally.flying) {
+                        if (!dangerflyzone.count(pos)) reach_pos_list.push_back(pos);
+                    } else {
+                        if (!dangerzone.count(pos)) reach_pos_list.push_back(pos);
+                    }
+                }
             }
             if (reach_pos_list.empty()) continue;
 
