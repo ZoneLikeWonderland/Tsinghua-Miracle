@@ -4,6 +4,7 @@
 #include "gameunit.h"
 
 #include <fstream>
+#include <queue>
 #include <random>
 #include <stdlib.h>
 #include <time.h>
@@ -29,8 +30,26 @@ using std::string;
 using std::uniform_int_distribution;
 using std::vector;
 
+struct poshash {
+    size_t operator()(const Pos &pos) const {
+        return (std::get<0>(pos) << 20) + (std::get<1>(pos) << 10) +
+               std::get<2>(pos);
+    }
+};
+
+std::vector<Pos> around(Pos pos, int radius) {
+    std::vector<Pos> start = {
+        make_tuple(get<0>(pos), get<1>(pos) + radius, get<2>(pos) - radius),
+        make_tuple(get<0>(pos), get<1>(pos) - radius, get<2>(pos) + radius),
+        make_tuple(get<0>(pos) + radius, get<1>(pos), get<2>(pos) - radius),
+        make_tuple(get<0>(pos) - radius, get<1>(pos), get<2>(pos) + radius),
+        make_tuple(get<0>(pos) + radius, get<1>(pos) - radius, get<2>(pos)),
+        make_tuple(get<0>(pos) - radius, get<1>(pos) + radius, get<2>(pos))};
+    return start;
+}
+
 class AI : public AiClient {
-  private:
+  public:
     Pos miracle_pos;
 
     Pos enemy_pos;
@@ -38,6 +57,12 @@ class AI : public AiClient {
     Pos target_barrack;
 
     Pos posShift(Pos pos, string direct);
+
+    std::unordered_set<Pos, poshash> LandObs;
+    std::unordered_set<Pos, poshash> Map;
+    std::unordered_set<Pos, poshash> Highway;
+    std::unordered_map<Pos, double, poshash> LandPosCost;
+    std::unordered_map<Pos, double, poshash> Safety;
 
   public:
     //选择初始卡组
@@ -58,7 +83,7 @@ void AI::chooseCards() {
      * 【进阶】在选择卡牌时，就已经知道了自己的所在阵营和先后手，因此可以在此处根据先后手的不同设置不同的卡组和神器
      */
     my_artifacts = {"HolyLight"};
-    my_creatures = {"Archer", "Swordsman", "VolcanoDragon"};
+    my_creatures = {"Archer", "Swordsman", "FrostDragon"};
     init();
 }
 
@@ -98,6 +123,33 @@ void AI::play() {
         enemy_pos = map.miracles[my_camp ^ 1].pos;
         // 在正中心偏右召唤一个弓箭手，用来抢占驻扎点
         summon("Archer", 1, posShift(miracle_pos, "SF"));
+        // summon("Swordsman", 1, posShift(miracle_pos, "SF"));
+
+        for (auto &x : map.ground_obstacles) LandObs.insert(x.pos);
+        for (auto &x : all_pos_in_map()) Map.insert(x), Safety[x] = 0;
+        Highway = {Pos(-2, 0, 2), Pos(2, 0, -2), Pos(-1, -1, 2),
+                   Pos(1, 1, -2), Pos(0, -2, 2), Pos(0, 2, -2)};
+
+        {
+            // std::unordered_set<Pos, poshash> visit;
+            std::queue<Pos> q;
+            q.push(enemy_pos);
+            LandPosCost[enemy_pos] = 0;
+            while (!q.empty()) {
+                auto x = q.front();
+                q.pop();
+                // visit.insert(x);
+                for (auto &neighbour : around(x, 1)) {
+                    if (LandObs.count(neighbour)) continue;
+                    if (!Map.count(neighbour)) continue;
+                    if (!LandPosCost.count(neighbour) ||
+                        LandPosCost[neighbour] > LandPosCost[x] + 1) {
+                        LandPosCost[neighbour] = LandPosCost[x] + 1;
+                        q.push(neighbour);
+                    }
+                }
+            }
+        }
     }
     //设定目标驻扎点为最近的驻扎点
 
@@ -106,7 +158,7 @@ void AI::play() {
         if (barrack.camp == my_camp) mybarrack = barrack.pos;
     target_barrack = invalid;
     if (mybarrack == miracle_pos ||
-        round > 100) { //确定离自己基地最近的驻扎点的位置
+        round > 200) { //确定离自己基地最近的驻扎点的位置
         for (const auto &barrack : map.barracks) {
             // std::cerr << barrack.camp << " ";
             if (barrack.camp == -1 &&
@@ -134,6 +186,11 @@ void AI::play() {
         use(players[my_camp].artifact[0].id, best_pos);
     }
 
+    for (auto &x : Safety) x.second = 0;
+    for (auto &enemy : getUnitsByCamp(my_camp ^ 1)) {
+        for (auto &x : Safety) x.second += cube_distance(x.first, enemy.pos);
+    }
+
     //之后先战斗，再移动
     battle();
 
@@ -144,8 +201,7 @@ void AI::play() {
     auto summon_pos_list = getSummonPosByCamp(my_camp);
     sort(summon_pos_list.begin(), summon_pos_list.end(),
          [this](Pos _pos1, Pos _pos2) {
-             return cube_distance(_pos1, enemy_pos) <
-                    cube_distance(_pos2, enemy_pos);
+             return this->Safety[_pos1] < this->Safety[_pos2];
          });
     vector<Pos> available_summon_pos_list;
     for (auto pos : summon_pos_list) {
@@ -160,14 +216,6 @@ void AI::play() {
     for (const auto &card_unit : deck)
         available_count[card_unit.type] = card_unit.available_count;
 
-    // //剑士和弓箭手数量不足或者格子不足则召唤火山龙
-    // if ((available_summon_pos_list.size() == 1 ||
-    // available_count["Swordsman"] + available_count["Archer"] < 2) &&
-    //     mana >= CARD_DICT.at("VolcanoDragon")[1].cost &&
-    //     available_count["VolcanoDragon"] > 0) {
-    //     summon_list.push_back("VolcanoDragon");
-    //     mana -= CARD_DICT.at("VolcanoDragon")[1].cost;
-    // }
     summon_list.clear();
     bool suc = true;
     while (mana >= 2 && suc) {
@@ -176,11 +224,11 @@ void AI::play() {
         suc |= call(CARD_DICT.at("Archer")[2]);
         suc |= call(CARD_DICT.at("Archer")[2]);
         suc |= call(CARD_DICT.at("Swordsman")[3]);
-        suc |= call(CARD_DICT.at("VolcanoDragon")[3]);
+        suc |= call(CARD_DICT.at("FrostDragon")[3]);
         suc |= call(CARD_DICT.at("Swordsman")[2]);
-        suc |= call(CARD_DICT.at("VolcanoDragon")[2]);
+        suc |= call(CARD_DICT.at("FrostDragon")[2]);
         suc |= call(CARD_DICT.at("Swordsman")[1]);
-        suc |= call(CARD_DICT.at("VolcanoDragon")[1]);
+        suc |= call(CARD_DICT.at("FrostDragon")[1]);
     }
 
     int i = 0;
@@ -255,7 +303,7 @@ void AI::battle() {
             return unit2.can_atk < unit1.can_atk;
         else if (unit1.type != unit2.type) { //火山龙>剑士>弓箭手
             auto type_id_gen = [](const string &type_name) {
-                if (type_name == "VolcanoDragon")
+                if (type_name == "FrostDragon")
                     return 0;
                 else if (type_name == "Swordsman")
                     return 1;
@@ -263,7 +311,7 @@ void AI::battle() {
                     return 2;
             };
             return (type_id_gen(unit1.type) < type_id_gen(unit2.type));
-        } else if (unit1.type == "VolcanoDragon" or unit1.type == "Archer")
+        } else if (unit1.type == "FrostDragon" or unit1.type == "Archer")
             return unit2.atk < unit1.atk;
         else
             return unit1.atk < unit2.atk;
@@ -277,7 +325,7 @@ void AI::battle() {
         for (const auto &enemy : enemy_list)
             if (AiClient::canAttack(ally, enemy)) target_list.push_back(enemy);
         if (target_list.empty()) continue;
-        if (ally.type == "VolcanoDragon") {
+        if (ally.type == "FrostDragon") {
             default_random_engine g(static_cast<unsigned int>(time(nullptr)));
             int tar = uniform_int_distribution<>(0, target_list.size() - 1)(g);
             attack(ally.id, target_list[tar].id);
@@ -320,23 +368,10 @@ void AI::battle() {
     }
 }
 
-struct poshash {
-    size_t operator()(const Pos &pos) const {
-        return (std::get<0>(pos) << 20) + (std::get<1>(pos) << 10) +
-               std::get<2>(pos);
-    }
-};
-
 std::unordered_set<Pos, poshash> circle(Pos pos, int radius) {
     if (radius == 0) return std::unordered_set<Pos, poshash>({pos});
     std::unordered_set<Pos, poshash> ret;
-    std::vector<Pos> start = {
-        make_tuple(get<0>(pos), get<1>(pos) + radius, get<2>(pos) - radius),
-        make_tuple(get<0>(pos), get<1>(pos) - radius, get<2>(pos) + radius),
-        make_tuple(get<0>(pos) + radius, get<1>(pos), get<2>(pos) - radius),
-        make_tuple(get<0>(pos) - radius, get<1>(pos), get<2>(pos) + radius),
-        make_tuple(get<0>(pos) + radius, get<1>(pos) - radius, get<2>(pos)),
-        make_tuple(get<0>(pos) - radius, get<1>(pos) + radius, get<2>(pos))};
+    std::vector<Pos> start = around(pos, radius);
     for (int i = 1; i <= radius; i++) {
         for (auto &x : start) ret.insert(x);
         start[0] = make_tuple(get<0>(start[0]) - 1, get<1>(start[0]),
@@ -398,7 +433,8 @@ void AI::march() {
             std::unordered_set<Pos, poshash> dangerzone;
             for (auto &enemy : enemy_list) {
                 for (int i = enemy.atk_range[0]; i <= enemy.atk_range[1]; i++) {
-                    if (ally.atk_range[0] <= i && i <= ally.atk_range[1])
+                    if (ally.atk_range[0] <= i && i <= ally.atk_range[1] &&
+                        (!enemy.flying || enemy.flying && ally.atk_flying))
                         continue;
                     dangerzone.merge(circle(enemy.pos, i));
                 }
@@ -409,10 +445,11 @@ void AI::march() {
             vector<std::pair<Pos, double>> reach_pos_list;
             for (const auto &reach_pos : reach_pos_with_dis) {
                 for (auto pos : reach_pos) {
-                    if (pos == enemy_pos) continue;
-                    double cost = cube_distance(pos, enemy_pos);
+                    double cost = LandPosCost[pos];
+                    if (cost == 0) continue;
+                    if (cost < ally.atk_range[0]) cost += 3;
                     if (dangerzone.count(pos)) cost += 10;
-
+                    if (ally.type == "Archer" && Highway.count(pos)) cost += 2;
                     reach_pos_list.push_back(std::make_pair(pos, cost));
                 }
             }
@@ -439,7 +476,8 @@ void AI::march() {
                                 return _pos1.second < _pos2.second;
                             });
                 move(ally.id, reach_pos_list[0].first);
-                // std::cerr<<reach_pos_list[0].second<<"<"<<reach_pos_list[1].second<<"\n";
+                // std::cerr << round << ":" << ally.id << ":";
+                // printpos(reach_pos_list[0].first);
             }
         }
     }
