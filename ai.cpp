@@ -30,6 +30,16 @@ using std::string;
 using std::uniform_int_distribution;
 using std::vector;
 
+double eps() {
+    return 0;
+    static bool init = true;
+    if (init) {
+        srand(time(NULL));
+        init = false;
+    }
+    return double(rand() - RAND_MAX / 2) / double(RAND_MAX) * 0.1f;
+}
+
 struct poshash {
     size_t operator()(const Pos &pos) const {
         return (std::get<0>(pos) << 20) + (std::get<1>(pos) << 10) +
@@ -94,12 +104,20 @@ void printpos(Pos pos) {
               << "\n";
 }
 
+bool IsSummonStupid(Pos pos, card::Creature cr, gameunit::Unit enemy) {
+    auto dist = cube_distance(pos, enemy.pos);
+    if (enemy.atk_range[0] <= dist && dist <= enemy.atk_range[1]) {
+        if (dist < cr.min_atk_range || dist > cr.max_atk_range) return true;
+    }
+    return false;
+}
+
 int mana;
-vector<card::Creature> summon_list;
+// vector<card::Creature> summon_list;
 ::map<string, int> available_count;
 bool call(card::Creature todo) {
     if (available_count[todo.type] > 0 && mana >= todo.cost) {
-        summon_list.push_back(todo);
+        // summon_list.push_back(todo);
         mana -= todo.cost;
         available_count[todo.type] -= 1;
         return true;
@@ -190,6 +208,13 @@ void AI::play() {
     for (auto &enemy : getUnitsByCamp(my_camp ^ 1)) {
         for (auto &x : Safety) x.second += cube_distance(x.first, enemy.pos);
     }
+    auto threat = units_in_range(miracle_pos, 5, map, my_camp ^ 1);
+    if (threat.size() > 0) {
+        for (auto &enemy : threat) {
+            for (auto &x : Safety)
+                x.second += 2 * cube_distance(x.first, enemy.pos);
+        }
+    }
 
     //之后先战斗，再移动
     battle();
@@ -216,26 +241,42 @@ void AI::play() {
     for (const auto &card_unit : deck)
         available_count[card_unit.type] = card_unit.available_count;
 
-    summon_list.clear();
-    bool suc = true;
-    while (mana >= 2 && suc) {
-        suc = false;
-        suc |= call(CARD_DICT.at("Archer")[2]);
-        suc |= call(CARD_DICT.at("Archer")[2]);
-        suc |= call(CARD_DICT.at("Archer")[2]);
-        suc |= call(CARD_DICT.at("Swordsman")[3]);
-        suc |= call(CARD_DICT.at("FrostDragon")[3]);
-        suc |= call(CARD_DICT.at("Swordsman")[2]);
-        suc |= call(CARD_DICT.at("FrostDragon")[2]);
-        suc |= call(CARD_DICT.at("Swordsman")[1]);
-        suc |= call(CARD_DICT.at("FrostDragon")[1]);
-    }
+    // summon_list.clear();
+    // bool suc = true;
+    // while (mana >= 2 && suc) {
+    //     suc = false;
+    //     suc |= call(CARD_DICT.at("Archer")[2]);
+    //     suc |= call(CARD_DICT.at("Archer")[2]);
+    //     suc |= call(CARD_DICT.at("Archer")[2]);
+    //     suc |= call(CARD_DICT.at("Swordsman")[3]);
+    //     suc |= call(CARD_DICT.at("FrostDragon")[3]);
+    //     suc |= call(CARD_DICT.at("Swordsman")[2]);
+    //     suc |= call(CARD_DICT.at("FrostDragon")[2]);
+    //     suc |= call(CARD_DICT.at("Swordsman")[1]);
+    //     suc |= call(CARD_DICT.at("FrostDragon")[1]);
+    // }
+    threat = units_in_range(miracle_pos, 5, map, my_camp ^ 1);
+    vector<card::Creature> priority = {
+        CARD_DICT.at("Archer")[2],      CARD_DICT.at("Swordsman")[3],
+        CARD_DICT.at("FrostDragon")[3], CARD_DICT.at("Swordsman")[2],
+        CARD_DICT.at("FrostDragon")[2], CARD_DICT.at("Swordsman")[1],
+        CARD_DICT.at("FrostDragon")[1]};
 
-    int i = 0;
+    // int i = 0;
     for (auto pos : available_summon_pos_list) {
-        if (i == summon_list.size()) break;
-        summon(summon_list[i].type, summon_list[i].level, pos);
-        ++i;
+        if (mana <= 1) break;
+        for (auto &card : priority) {
+            bool bad = false;
+            for (auto &enemy : threat) {
+                bad |= IsSummonStupid(pos, card, enemy);
+            }
+            if (!bad) {
+                if (call(card)) {
+                    summon(card.type, card.level, pos);
+                    break;
+                }
+            }
+        }
     }
 
     endRound();
@@ -450,7 +491,7 @@ void AI::march() {
                     if (cost < ally.atk_range[0]) cost += 3;
                     if (dangerzone.count(pos)) cost += 10;
                     if (ally.type == "Archer" && Highway.count(pos)) cost += 2;
-                    reach_pos_list.push_back(std::make_pair(pos, cost));
+                    reach_pos_list.push_back(std::make_pair(pos, cost + eps()));
                 }
             }
             if (reach_pos_list.empty()) continue;
@@ -477,6 +518,8 @@ void AI::march() {
                             });
                 move(ally.id, reach_pos_list[0].first);
                 // std::cerr << round << ":" << ally.id << ":";
+                // std::cerr << reach_pos_list[0].second << ","
+                //           << reach_pos_list[1].second << "\n";
                 // printpos(reach_pos_list[0].first);
             }
         }
