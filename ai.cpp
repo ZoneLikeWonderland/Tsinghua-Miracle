@@ -30,6 +30,17 @@ using std::string;
 using std::uniform_int_distribution;
 using std::vector;
 
+double simlog(double dist) {
+    if (dist <= 1) return 0;
+    if (dist <= 2) return 1;
+    if (dist <= 3) return 2;
+    if (dist <= 4) return 2.5;
+    if (dist <= 5)
+        return 3;
+    else
+        return 3.5;
+}
+
 double eps() {
     return 0;
     static bool init = true;
@@ -46,6 +57,14 @@ struct poshash {
                std::get<2>(pos);
     }
 };
+
+bool inrange(Unit atker, Unit victim) {
+    if (cube_distance(atker.pos, victim.pos) >= atker.atk_range[0] &&
+        cube_distance(atker.pos, victim.pos) <= atker.atk_range[1] &&
+        (!victim.flying || victim.flying && atker.atk_flying))
+        return true;
+    return false;
+}
 
 std::vector<Pos> around(Pos pos, int radius) {
     std::vector<Pos> start = {
@@ -73,6 +92,7 @@ class AI : public AiClient {
     std::unordered_set<Pos, poshash> Highway;
     std::unordered_map<Pos, double, poshash> LandPosCost;
     std::unordered_map<Pos, double, poshash> Safety;
+    std::unordered_map<Pos, double, poshash> NumOfAlly3;
 
   public:
     //选择初始卡组
@@ -93,7 +113,7 @@ void AI::chooseCards() {
      * 【进阶】在选择卡牌时，就已经知道了自己的所在阵营和先后手，因此可以在此处根据先后手的不同设置不同的卡组和神器
      */
     my_artifacts = {"HolyLight"};
-    my_creatures = {"Archer", "Swordsman", "FrostDragon"};
+    my_creatures = {"Archer", "Swordsman", "Priest"};
     init();
 }
 
@@ -145,6 +165,7 @@ void AI::play() {
 
         for (auto &x : map.ground_obstacles) LandObs.insert(x.pos);
         for (auto &x : all_pos_in_map()) Map.insert(x), Safety[x] = 0;
+        for (auto &x : all_pos_in_map()) Map.insert(x), NumOfAlly3[x] = 0;
         Highway = {Pos(-2, 0, 2), Pos(2, 0, -2), Pos(-1, -1, 2),
                    Pos(1, 1, -2), Pos(0, -2, 2), Pos(0, 2, -2)};
 
@@ -204,20 +225,21 @@ void AI::play() {
         use(players[my_camp].artifact[0].id, best_pos);
     }
 
+    //之后先战斗，再移动
+    battle();
+
     for (auto &x : Safety) x.second = 0;
     for (auto &enemy : getUnitsByCamp(my_camp ^ 1)) {
-        for (auto &x : Safety) x.second += cube_distance(x.first, enemy.pos);
+        for (auto &x : Safety)
+            x.second += simlog(cube_distance(x.first, enemy.pos));
     }
     auto threat = units_in_range(miracle_pos, 5, map, my_camp ^ 1);
     if (threat.size() > 0) {
         for (auto &enemy : threat) {
             for (auto &x : Safety)
-                x.second += 2 * cube_distance(x.first, enemy.pos);
+                x.second += 2 * simlog(cube_distance(x.first, enemy.pos));
         }
     }
-
-    //之后先战斗，再移动
-    battle();
 
     march();
 
@@ -241,26 +263,13 @@ void AI::play() {
     for (const auto &card_unit : deck)
         available_count[card_unit.type] = card_unit.available_count;
 
-    // summon_list.clear();
-    // bool suc = true;
-    // while (mana >= 2 && suc) {
-    //     suc = false;
-    //     suc |= call(CARD_DICT.at("Archer")[2]);
-    //     suc |= call(CARD_DICT.at("Archer")[2]);
-    //     suc |= call(CARD_DICT.at("Archer")[2]);
-    //     suc |= call(CARD_DICT.at("Swordsman")[3]);
-    //     suc |= call(CARD_DICT.at("FrostDragon")[3]);
-    //     suc |= call(CARD_DICT.at("Swordsman")[2]);
-    //     suc |= call(CARD_DICT.at("FrostDragon")[2]);
-    //     suc |= call(CARD_DICT.at("Swordsman")[1]);
-    //     suc |= call(CARD_DICT.at("FrostDragon")[1]);
-    // }
     threat = units_in_range(miracle_pos, 5, map, my_camp ^ 1);
     vector<card::Creature> priority = {
-        CARD_DICT.at("Archer")[2],      CARD_DICT.at("Swordsman")[3],
-        CARD_DICT.at("FrostDragon")[3], CARD_DICT.at("Swordsman")[2],
-        CARD_DICT.at("FrostDragon")[2], CARD_DICT.at("Swordsman")[1],
-        CARD_DICT.at("FrostDragon")[1]};
+        CARD_DICT.at("Priest")[3],    CARD_DICT.at("Archer")[3],
+        CARD_DICT.at("Archer")[2],    CARD_DICT.at("Swordsman")[3],
+        CARD_DICT.at("Priest")[2],    CARD_DICT.at("Swordsman")[2],
+        CARD_DICT.at("Swordsman")[1],
+    };
 
     // int i = 0;
     for (auto pos : available_summon_pos_list) {
@@ -344,29 +353,43 @@ void AI::battle() {
             return unit2.can_atk < unit1.can_atk;
         else if (unit1.type != unit2.type) { //火山龙>剑士>弓箭手
             auto type_id_gen = [](const string &type_name) {
-                if (type_name == "FrostDragon")
+                if (type_name == "Swordsman")
                     return 0;
-                else if (type_name == "Swordsman")
+                else if (type_name == "Archer")
                     return 1;
                 else
                     return 2;
             };
             return (type_id_gen(unit1.type) < type_id_gen(unit2.type));
-        } else if (unit1.type == "FrostDragon" or unit1.type == "Archer")
+        } else if (unit1.type == "Priest" or unit1.type == "Archer")
             return unit2.atk < unit1.atk;
         else
             return unit1.atk < unit2.atk;
     };
+    //最!后攻击神迹
+    ally_list = getUnitsByCamp(my_camp);
+    sort(ally_list.begin(), ally_list.end(), cmp);
+    for (auto ally : ally_list) {
+        if (!ally.can_atk) break;
+        int dis = cube_distance(ally.pos, enemy_pos);
+        if (ally.atk_range[0] <= dis && dis <= ally.atk_range[1])
+            attack(ally.id, my_camp ^ 1);
+    }
     //按顺序排列好单位，依次攻击
+    ally_list = getUnitsByCamp(my_camp);
     sort(ally_list.begin(), ally_list.end(), cmp);
     for (const auto &ally : ally_list) {
         if (!ally.can_atk) break;
         auto enemy_list = getUnitsByCamp(my_camp ^ 1);
         vector<Unit> target_list;
         for (const auto &enemy : enemy_list)
-            if (AiClient::canAttack(ally, enemy)) target_list.push_back(enemy);
+            if (AiClient::canAttack(ally, enemy))
+                if (ally.type == "Priest") {
+                    if (!inrange(enemy, ally)) target_list.push_back(enemy);
+                } else
+                    target_list.push_back(enemy);
         if (target_list.empty()) continue;
-        if (ally.type == "FrostDragon") {
+        if (ally.type == "Priest") {
             default_random_engine g(static_cast<unsigned int>(time(nullptr)));
             int tar = uniform_int_distribution<>(0, target_list.size() - 1)(g);
             attack(ally.id, target_list[tar].id);
@@ -468,8 +491,17 @@ void AI::march() {
     for (const auto &ally : ally_list) {
         if (cube_distance(ally.pos, enemy_pos) <= 1) empty_slot--;
     }
+    bool done = false;
     for (const auto &ally : ally_list) {
         if (!ally.can_move) continue;
+        if (ally.type == "Priest" && !done) {
+            for (auto &x : NumOfAlly3) x.second = 0;
+            for (auto &ally : getUnitsByCamp(my_camp)) {
+                for (auto &x : NumOfAlly3)
+                    x.second += cube_distance(x.first, ally.pos) <= 3 ? 1 : 0;
+            }
+            done = true;
+        }
         {
             std::unordered_set<Pos, poshash> dangerzone;
             for (auto &enemy : enemy_list) {
@@ -487,6 +519,8 @@ void AI::march() {
             for (const auto &reach_pos : reach_pos_with_dis) {
                 for (auto pos : reach_pos) {
                     double cost = LandPosCost[pos];
+                    if (ally.type == "Swordsman") cost = Safety[pos];
+                    if (ally.type == "Priest") cost = -NumOfAlly3[pos];
                     if (cost == 0) continue;
                     if (cost < ally.atk_range[0]) cost += 3;
                     if (dangerzone.count(pos)) cost += 10;
@@ -516,7 +550,10 @@ void AI::march() {
                                    std::pair<Pos, double> _pos2) {
                                 return _pos1.second < _pos2.second;
                             });
+                auto backup = ally.pos;
                 move(ally.id, reach_pos_list[0].first);
+                // for (auto &pos : circle(reach_pos_list[0].first, 1))
+                //     if (Safety.count(pos)) Safety[pos] += 0.1;
                 // std::cerr << round << ":" << ally.id << ":";
                 // std::cerr << reach_pos_list[0].second << ","
                 //           << reach_pos_list[1].second << "\n";
