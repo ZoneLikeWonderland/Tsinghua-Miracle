@@ -508,7 +508,10 @@ void AI::march() {
                 for (int i = enemy.atk_range[0]; i <= enemy.atk_range[1]; i++) {
                     if (ally.atk_range[0] <= i && i <= ally.atk_range[1] &&
                         (!enemy.flying || enemy.flying && ally.atk_flying))
-                        continue;
+                        if (ally.type == "Priest") {
+                            if (!inrange(enemy, ally)) continue;
+                        } else
+                            continue;
                     dangerzone.merge(circle(enemy.pos, i));
                 }
             }
