@@ -3,6 +3,7 @@
 #include "card.hpp"
 #include "gameunit.h"
 
+#include <cmath>
 #include <fstream>
 #include <queue>
 #include <random>
@@ -35,10 +36,16 @@ double simlog(double dist) {
     if (dist <= 2) return 1;
     if (dist <= 3) return 2;
     if (dist <= 4) return 2.5;
-    if (dist <= 5)
-        return 3;
-    else
-        return 3.5;
+    if (dist <= 5) return 3;
+    return 3.5 + dist / 100000;
+}
+
+int desiredpriest(int total) {
+    if (total <= 3) return 0;
+    if (total <= 5) return 1;
+    if (total <= 7) return 2;
+    if (total <= 9) return 3;
+    return 100;
 }
 
 double eps() {
@@ -275,6 +282,37 @@ void AI::play() {
     for (auto pos : available_summon_pos_list) {
         if (mana <= 1) break;
         for (auto &card : priority) {
+            if (card.type == "Priest") {
+                auto allies = getUnitsByCamp(my_camp);
+                auto total = allies.size();
+                auto prinum = 0;
+                for (auto &ally : allies)
+                    if (ally.type == "Priest") prinum++;
+                if (prinum > desiredpriest(total)) continue;
+            }
+            bool bad = false;
+            for (auto &enemy : threat) {
+                bad |= IsSummonStupid(pos, card, enemy);
+            }
+            if (!bad) {
+                if (call(card)) {
+                    summon(card.type, card.level, pos);
+                    break;
+                }
+            }
+        }
+    }
+
+    available_summon_pos_list.clear();
+    for (auto pos : summon_pos_list) {
+        auto unit_on_pos_ground = getUnitByPos(pos, false);
+        if (unit_on_pos_ground.id == -1)
+            available_summon_pos_list.push_back(pos);
+    }
+
+    for (auto pos : available_summon_pos_list) {
+        if (mana <= 1) break;
+        for (auto &card : priority) {
             bool bad = false;
             for (auto &enemy : threat) {
                 bad |= IsSummonStupid(pos, card, enemy);
@@ -374,6 +412,49 @@ void AI::battle() {
         int dis = cube_distance(ally.pos, enemy_pos);
         if (ally.atk_range[0] <= dis && dis <= ally.atk_range[1])
             attack(ally.id, my_camp ^ 1);
+    }
+    //按顺序排列好单位，依次攻击，不许反击
+    ally_list = getUnitsByCamp(my_camp);
+    sort(ally_list.begin(), ally_list.end(), cmp);
+    for (const auto &ally : ally_list) {
+        if (!ally.can_atk) break;
+        auto enemy_list = getUnitsByCamp(my_camp ^ 1);
+        vector<Unit> target_list;
+        for (const auto &enemy : enemy_list)
+            if (AiClient::canAttack(ally, enemy))
+                if (!inrange(enemy, ally)) target_list.push_back(enemy);
+        if (target_list.empty()) continue;
+        if (ally.type == "Priest") {
+            default_random_engine g(static_cast<unsigned int>(time(nullptr)));
+            int tar = uniform_int_distribution<>(0, target_list.size() - 1)(g);
+            attack(ally.id, target_list[tar].id);
+        } else if (ally.type == "Swordsman") {
+            nth_element(enemy_list.begin(), enemy_list.begin(),
+                        enemy_list.end(),
+                        [](const Unit &_enemy1, const Unit &_enemy2) {
+                            return _enemy1.atk < _enemy2.atk;
+                        });
+            attack(ally.id, target_list[0].id);
+        } else if (ally.type == "Archer") {
+            sort(enemy_list.begin(), enemy_list.end(),
+                 [](const Unit &_enemy1, const Unit &_enemy2) {
+                     return _enemy1.atk > _enemy2.atk;
+                 });
+            bool suc = false;
+            for (const auto &enemy : target_list)
+                if (!canAttack(enemy, ally)) {
+                    attack(ally.id, enemy.id);
+                    suc = true;
+                    break;
+                }
+            if (suc) continue;
+            nth_element(enemy_list.begin(), enemy_list.begin(),
+                        enemy_list.end(),
+                        [](const Unit &_enemy1, const Unit &_enemy2) {
+                            return _enemy1.atk < _enemy2.atk;
+                        });
+            attack(ally.id, target_list[0].id);
+        }
     }
     //按顺序排列好单位，依次攻击
     ally_list = getUnitsByCamp(my_camp);
@@ -496,9 +577,12 @@ void AI::march() {
         if (!ally.can_move) continue;
         if (ally.type == "Priest" && !done) {
             for (auto &x : NumOfAlly3) x.second = 0;
-            for (auto &ally : getUnitsByCamp(my_camp)) {
-                for (auto &x : NumOfAlly3)
-                    x.second += cube_distance(x.first, ally.pos) <= 3 ? 1 : 0;
+            for (auto &ally2 : getUnitsByCamp(my_camp)) {
+                if (ally.id != ally2.id)
+                    for (auto &x : NumOfAlly3)
+                        x.second += cube_distance(x.first, ally2.pos) <= 3
+                                        ? (ally2.type == "Priest" ? 0.1 : 1)
+                                        : 0;
             }
             done = true;
         }
