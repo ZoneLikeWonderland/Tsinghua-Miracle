@@ -48,7 +48,7 @@ double eps() {
         srand(time(NULL));
         init = false;
     }
-    return double(rand() - RAND_MAX / 2) / double(RAND_MAX) * 0.1f;
+    return double(rand() - RAND_MAX / 2) / double(RAND_MAX) * 0.000001f;
 }
 
 struct poshash {
@@ -57,14 +57,6 @@ struct poshash {
                std::get<2>(pos);
     }
 };
-
-bool inrange(Unit atker, Unit victim) {
-    if (cube_distance(atker.pos, victim.pos) >= atker.atk_range[0] &&
-        cube_distance(atker.pos, victim.pos) <= atker.atk_range[1] &&
-        (!victim.flying || victim.flying && atker.atk_flying))
-        return true;
-    return false;
-}
 
 std::vector<Pos> around(Pos pos, int radius) {
     std::vector<Pos> start = {
@@ -92,6 +84,7 @@ class AI : public AiClient {
     std::unordered_set<Pos, poshash> Highway;
     std::unordered_map<Pos, double, poshash> LandPosCost;
     std::unordered_map<Pos, double, poshash> Safety;
+    std::unordered_map<Pos, double, poshash> Danger;
     std::unordered_map<Pos, double, poshash> NumOfAlly3;
 
   public:
@@ -112,7 +105,7 @@ void AI::chooseCards() {
      * artifacts和creatures可以修改
      * 【进阶】在选择卡牌时，就已经知道了自己的所在阵营和先后手，因此可以在此处根据先后手的不同设置不同的卡组和神器
      */
-    my_artifacts = {"HolyLight"};
+    my_artifacts = {"SalamanderShield"};
     my_creatures = {"Archer", "Swordsman", "Priest"};
     init();
 }
@@ -165,7 +158,7 @@ void AI::play() {
 
         for (auto &x : map.ground_obstacles) LandObs.insert(x.pos);
         for (auto &x : all_pos_in_map()) Map.insert(x), Safety[x] = 0;
-        for (auto &x : all_pos_in_map()) Map.insert(x), NumOfAlly3[x] = 0;
+        for (auto &x : all_pos_in_map()) NumOfAlly3[x] = 0;
         Highway = {Pos(-2, 0, 2), Pos(2, 0, -2), Pos(-1, -1, 2),
                    Pos(1, 1, -2), Pos(0, -2, 2), Pos(0, 2, -2)};
 
@@ -212,17 +205,19 @@ void AI::play() {
     //神器能用就用，选择覆盖单位数最多的地点
     if (players[my_camp].mana >= 6 &&
         players[my_camp].artifact[0].state == "Ready") {
-        auto pos_list = all_pos_in_map();
+        auto pos_list = getUnitsByCamp(my_camp);
         auto best_pos = pos_list[0];
         int max_benefit = 0;
         for (auto pos : pos_list) {
-            auto unit_list = units_in_range(pos, 2, map, my_camp);
-            if (unit_list.size() > max_benefit) {
+            if (pos.type == "Archer" &&
+                (best_pos.type != "Archer" ||
+                 pos.level >= best_pos.level &&
+                     Safety[pos.pos] < Safety[best_pos.pos])) {
                 best_pos = pos;
-                max_benefit = unit_list.size();
             }
         }
-        use(players[my_camp].artifact[0].id, best_pos);
+        if (best_pos.type == "Archer")
+            use(players[my_camp].artifact[0].id, best_pos.id);
     }
 
     //之后先战斗，再移动
@@ -233,11 +228,15 @@ void AI::play() {
         for (auto &x : Safety)
             x.second += simlog(cube_distance(x.first, enemy.pos));
     }
-    auto threat = units_in_range(miracle_pos, 5, map, my_camp ^ 1);
+    auto threat = units_in_range(miracle_pos, 9, map, my_camp ^ 1);
     if (threat.size() > 0) {
         for (auto &enemy : threat) {
             for (auto &x : Safety)
                 x.second += 2 * simlog(cube_distance(x.first, enemy.pos));
+            for (auto &addition : vector<Pos>({posShift(enemy.pos, "BB"),
+                                               posShift(enemy.pos, "SB"),
+                                               posShift(enemy.pos, "IB")}))
+                if (Safety.count(addition)) Safety[addition] -= 1;
         }
     }
 
@@ -263,7 +262,6 @@ void AI::play() {
     for (const auto &card_unit : deck)
         available_count[card_unit.type] = card_unit.available_count;
 
-    threat = units_in_range(miracle_pos, 5, map, my_camp ^ 1);
     vector<card::Creature> priority = {
         CARD_DICT.at("Priest")[3],    CARD_DICT.at("Archer")[3],
         CARD_DICT.at("Archer")[2],    CARD_DICT.at("Swordsman")[3],
@@ -276,7 +274,7 @@ void AI::play() {
         if (mana <= 1) break;
         for (auto &card : priority) {
             bool bad = false;
-            for (auto &enemy : threat) {
+            for (auto &enemy : units_in_range(pos, 8, map, my_camp ^ 1)) {
                 bad |= IsSummonStupid(pos, card, enemy);
             }
             if (!bad) {
@@ -382,10 +380,17 @@ void AI::battle() {
         if (!ally.can_atk) break;
         auto enemy_list = getUnitsByCamp(my_camp ^ 1);
         vector<Unit> target_list;
+
+        int bear = 0;
+        for (auto &enemy : enemy_list) {
+            if (canAttack(enemy, ally)) bear += enemy.atk;
+        }
+
         for (const auto &enemy : enemy_list)
             if (AiClient::canAttack(ally, enemy))
-                if (ally.type == "Priest") {
-                    if (!inrange(enemy, ally)) target_list.push_back(enemy);
+                if (ally.type == "Priest" ||
+                    (ally.type == "Archer" && !ally.holy_shield)) {
+                    if (bear < ally.hp) target_list.push_back(enemy);
                 } else
                     target_list.push_back(enemy);
         if (target_list.empty()) continue;
@@ -401,6 +406,13 @@ void AI::battle() {
                         });
             attack(ally.id, target_list[0].id);
         } else if (ally.type == "Archer") {
+            auto threat = units_in_range(ally.pos, 1, map, my_camp ^ 1);
+            auto num = 0;
+            for (auto &enemy : threat) {
+                if (canAttack(enemy, ally)) num++;
+            }
+            if (num >= 2) continue;
+            if (num >= 1 && !ally.holy_shield) continue;
             sort(enemy_list.begin(), enemy_list.end(),
                  [](const Unit &_enemy1, const Unit &_enemy2) {
                      return _enemy1.atk > _enemy2.atk;
@@ -496,27 +508,37 @@ void AI::march() {
         if (!ally.can_move) continue;
         if (ally.type == "Priest" && !done) {
             for (auto &x : NumOfAlly3) x.second = 0;
-            for (auto &ally : getUnitsByCamp(my_camp)) {
-                for (auto &x : NumOfAlly3)
-                    x.second += cube_distance(x.first, ally.pos) <= 3 ? 1 : 0;
+            for (auto &ally2 : getUnitsByCamp(my_camp)) {
+                if (ally.id != ally2.id)
+                    for (auto &x : NumOfAlly3)
+                        x.second +=
+                            cube_distance(x.first, ally2.pos) <= 3
+                                ? (ally.type == "Priest" ? 0.3 : 1)
+                                : double(cube_distance(x.first, ally2.pos)) /
+                                      1000;
             }
             done = true;
         }
         {
-            std::unordered_set<Pos, poshash> dangerzone;
-            for (auto &enemy : enemy_list) {
-                for (int i = enemy.atk_range[0]; i <= enemy.atk_range[1]; i++) {
-                    if (ally.atk_range[0] <= i && i <= ally.atk_range[1] &&
-                        (!enemy.flying || enemy.flying && ally.atk_flying))
-                        if (ally.type == "Priest") {
-                            if (!inrange(enemy, ally)) continue;
-                        } else
+            // std::unordered_set<Pos, poshash> dangerzone;
+            for (auto &x : Danger) x.second = 0;
+            auto reach_pos_with_dis = reachable(ally, map);
+            for (auto &reach_pos : reach_pos_with_dis) {
+                for (auto pos : reach_pos) {
+                    auto fake = ally;
+                    fake.pos = pos;
+                    for (auto &enemy : enemy_list) {
+                        if (cube_distance(pos, miracle_pos) < 5 &&
+                            cube_distance(enemy.pos, miracle_pos) < 5)
                             continue;
-                    dangerzone.merge(circle(enemy.pos, i));
+                        if (canAttack(enemy, fake))
+                            if (canAttack(fake, enemy))
+                                Danger[pos] += 50;
+                            else
+                                Danger[pos] += 100;
+                    }
                 }
             }
-            //获取所有可到达的位置
-            auto reach_pos_with_dis = reachable(ally, map);
             //压平
             vector<std::pair<Pos, double>> reach_pos_list;
             for (const auto &reach_pos : reach_pos_with_dis) {
@@ -526,7 +548,7 @@ void AI::march() {
                     if (ally.type == "Priest") cost = -NumOfAlly3[pos];
                     if (cost == 0) continue;
                     if (cost < ally.atk_range[0]) cost += 3;
-                    if (dangerzone.count(pos)) cost += 10;
+                    cost += Danger[pos];
                     if (ally.type == "Archer" && Highway.count(pos)) cost += 2;
                     reach_pos_list.push_back(std::make_pair(pos, cost + eps()));
                 }
